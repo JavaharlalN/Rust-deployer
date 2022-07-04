@@ -23,15 +23,24 @@ async fn main() {
         Ok(v) => v,
         Err(e) => return println!("Cannot load config: {}", e),
     };
+    let initial_data = match get_initial_data(config["initial_data"].as_str()) {
+        Ok(v) => v,
+        Err(e) => return println!("Cannot load initial data: {}", e),
+    };
     match deploy(
-        config["code"].as_str(),
-        config["keys"].as_str().map(|s| s.to_string()),
         config["parameters"].as_str(),
-        config["abi"].as_str(),
+        initial_data,
     ).await {
         Ok(_) => println!("Ok"),
         Err(e) => println!("Fail: {}", e),
     };
+}
+
+fn get_initial_data(path: Option<&str>) -> Result<Value, String> {
+    if let Some(p) = path {
+        return serde_json::from_slice(std::fs::read(p).map_err(|e| e.to_string())?.as_ref()).map_err(|e| e.to_string())
+    }
+    Err("initial data file is not defined. Supply path in the `config.json`.".to_string())
 }
 
 fn get_config() -> Result<Value, String> {
@@ -39,22 +48,21 @@ fn get_config() -> Result<Value, String> {
 }
 
 async fn deploy(
-    tvc: Option<&str>,
-    keys: Option<String>,
     params: Option<&str>,
-    abi_path: Option<&str>,
+    initial_data: Value,
 ) -> Result<(), String> {
-    let abi = Some(abi_from_matches_or_config(abi_path)?);
+    let abi = Some(load_abi(initial_data["abi_path"].as_str())?);
     let params = Some(load_params(params.unwrap())?);
     deploy_contract(
-        tvc.unwrap(),
+        initial_data["code_base64"].as_str().unwrap(),
         &abi.unwrap(),
         &params.unwrap(),
-        keys,
+        initial_data["public_key"].as_str(),
+        initial_data["secret_key"].as_str(),
     ).await
 }
 
-fn abi_from_matches_or_config(abi_path: Option<&str>) -> Result<String, String> {
+fn load_abi(abi_path: Option<&str>) -> Result<String, String> {
     abi_path.map(|s| s.to_string())
        .ok_or("ABI file is not defined. Supply it in the config.json.".to_string())
 }
@@ -116,13 +124,20 @@ async fn process_message(
 }
 
 async fn deploy_contract(
-    tvc: &str,
+    code_base64: &str,
     abi: &str,
     params: &str,
-    keys_file: Option<String>,
+    public_key: Option<&str>,
+    secret_key: Option<&str>,
 ) -> Result<(), String> {
     let ton = create_client_verbose()?;
-    let (msg, addr) = prepare_deploy_message(tvc, abi, params, keys_file).await?;
+    let (msg, addr) = prepare_deploy_message(
+        code_base64,
+        abi,
+        params,
+        public_key,
+        secret_key,
+    ).await?;
 
     process_message(ton.clone(), msg, false).await?;
 
@@ -167,18 +182,24 @@ async fn calc_acc_address(
     Ok(result.address)
 }
 
-fn load_keypair(filename: &str) -> Result<KeyPair, String> {
-    let keys_str = std::fs::read_to_string(filename)
-        .map_err(|e| format!("failed to read the keypair file: {}", e))?;
-    Ok(serde_json::from_str(&keys_str)
-        .map_err(|e| format!("failed to load keypair: {}", e))?)
+fn load_keypair(public_key: Option<&str>, secret_key: Option<&str>) -> Result<Option<KeyPair>, String> {
+    if let (Some(p), Some(s)) = (public_key, secret_key) {
+        let keys_str = format!(r#"{{
+            "public": "{}",
+            "secret": "{}"
+        }}"#, p, s);
+        return Ok(serde_json::from_str(&keys_str)
+            .map_err(|e| format!("failed to load keypair: {}", e))?);
+    }
+    Ok(None)
 }
 
 async fn prepare_deploy_message(
-    tvc: &str,
+    code_base64: &str,
     abi_path: &str,
     params: &str,
-    keys_file: Option<String>,
+    public_key: Option<&str>,
+    secret_key: Option<&str>,
 ) -> Result<(ParamsOfEncodeMessage, String), String> {
     let abi_str = std::fs::read_to_string(abi_path)
         .map_err(|e| format!("failed to read ABI file: {}", e))?;
@@ -186,12 +207,12 @@ async fn prepare_deploy_message(
         serde_json::from_str::<AbiContract>(&abi_str)
             .map_err(|e| format!("ABI is not a valid json: {}", e))?,
     );
-    let keypair = keys_file.map(|f| load_keypair(&f)).transpose()?;
-    let tvc_bytes = &std::fs::read(tvc)
-        .map_err(|e| format!("failed to read smart contract file: {}", e))?;
-    let tvc_base64 = base64::encode(&tvc_bytes);
+    let keypair = load_keypair(
+        public_key,
+        secret_key,
+    )?;
     let addr = calc_acc_address(
-        tvc_base64.clone(),
+        code_base64.to_string(),
         keypair.as_ref().map(|k| k.public.clone()),
         abi.clone()
     ).await?;
@@ -202,7 +223,7 @@ async fn prepare_deploy_message(
         abi,
         address: Some(addr.clone()),
         deploy_set: Some(DeploySet {
-            tvc: tvc_base64,
+            tvc: code_base64.to_string(),
             workchain_id: Some(WORKCHAIN),
             ..Default::default()
         }),
