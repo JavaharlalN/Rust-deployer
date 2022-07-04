@@ -1,6 +1,4 @@
 {
-    "abi": "SetcodeMultisigWallet.abi.json",
-    "keys": "wallet.scmsig2.json",
     "parameters": "{\"owners\": [\"0xf8780f83d8c5951de73cb3c07b134ecd5d00917a9083e3ea30721ca10063defc\",\"0xe795829a2d866d52b611e40ccc0cda9b720565a15d3aa62b96073baab45e7d27\",\"0x8b9be2bea26b47c293b28f8361ec63ea325a53105c866110b2525d4a38deff11\"],\"reqConfirms\": 3}",
-    "code": "SetcodeMultisigWallet.tvc"
+    "initial_data": "initial_data.json"
 }
