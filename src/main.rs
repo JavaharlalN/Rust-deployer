@@ -127,7 +127,6 @@ async fn deploy_contract(
         secret_key,
 		initial_data,
     ).await?;
-
     process_message(ton.clone(), msg, false).await?;
 
     println!("Transaction succeeded.");
@@ -144,11 +143,13 @@ async fn calc_acc_address(
     tvc_base64: String,
     pubkey: Option<String>,
     abi: Abi,
+	initial_data: Option<Value>,
 ) -> Result<String, String> {
     let ton = get_context();
     let dset = DeploySet {
         tvc: tvc_base64,
         workchain_id: Some(WORKCHAIN),
+		initial_data,
         ..Default::default()
     };
     let result = ton_client::abi::encode_message(
@@ -204,7 +205,8 @@ async fn prepare_deploy_message(
     let addr = calc_acc_address(
         code_base64.to_string(),
         keypair.as_ref().map(|k| k.public.clone()),
-        abi.clone()
+        abi.clone(),
+		initial_data.clone(),
     ).await?;
     let params = serde_json::from_str(params)
         .map_err(|e| format!("function arguments is not a json: {}", e))?;
