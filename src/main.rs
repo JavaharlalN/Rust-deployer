@@ -23,13 +23,9 @@ async fn main() {
         Ok(v) => v,
         Err(e) => return println!("Cannot load config: {}", e),
     };
-    let initial_data = match get_initial_data(config["initial_data"].as_str()) {
-        Ok(v) => v,
-        Err(e) => return println!("Cannot load initial data: {}", e),
-    };
     match deploy(
-        config["parameters"].as_str(),
-        initial_data,
+        config.clone(),
+        get_initial_data(config["initial_data"].as_str()).ok(),
     ).await {
         Ok(_) => println!("Ok"),
         Err(e) => println!("Fail: {}", e),
@@ -48,32 +44,23 @@ fn get_config() -> Result<Value, String> {
 }
 
 async fn deploy(
-    params: Option<&str>,
-    initial_data: Value,
+    config: Value,
+    initial_data: Option<Value>,
 ) -> Result<(), String> {
-    let abi = Some(load_abi(initial_data["abi_path"].as_str())?);
-    let params = Some(load_params(params.unwrap())?);
+    let abi = Some(load_abi(config["abi_path"].as_str())?);
     deploy_contract(
-        initial_data["code_base64"].as_str().unwrap(),
+        config["code_base64"].as_str().unwrap(),
         &abi.unwrap(),
-        &params.unwrap(),
-        initial_data["public_key"].as_str(),
-        initial_data["secret_key"].as_str(),
+        &config["parameters"].as_str().unwrap_or("{}"),
+        config["public_key"].as_str(),
+        config["secret_key"].as_str(),
+		initial_data,
     ).await
 }
 
 fn load_abi(abi_path: Option<&str>) -> Result<String, String> {
     abi_path.map(|s| s.to_string())
        .ok_or("ABI file is not defined. Supply it in the config.json.".to_string())
-}
-
-fn load_params(params: &str) -> Result<String, String> {
-    Ok(if params.find('{').is_none() {
-        std::fs::read_to_string(params)
-            .map_err(|e| format!("failed to load params from file: {}", e))?
-    } else {
-        params.to_string()
-    })
 }
 
 fn create_client_verbose() -> Result<Arc<ClientContext>, String> {
@@ -129,6 +116,7 @@ async fn deploy_contract(
     params: &str,
     public_key: Option<&str>,
     secret_key: Option<&str>,
+	initial_data: Option<Value>,
 ) -> Result<(), String> {
     let ton = create_client_verbose()?;
     let (msg, addr) = prepare_deploy_message(
@@ -137,8 +125,8 @@ async fn deploy_contract(
         params,
         public_key,
         secret_key,
+		initial_data,
     ).await?;
-
     process_message(ton.clone(), msg, false).await?;
 
     println!("Transaction succeeded.");
@@ -155,11 +143,13 @@ async fn calc_acc_address(
     tvc_base64: String,
     pubkey: Option<String>,
     abi: Abi,
+	initial_data: Option<Value>,
 ) -> Result<String, String> {
     let ton = get_context();
     let dset = DeploySet {
         tvc: tvc_base64,
         workchain_id: Some(WORKCHAIN),
+		initial_data,
         ..Default::default()
     };
     let result = ton_client::abi::encode_message(
@@ -200,6 +190,7 @@ async fn prepare_deploy_message(
     params: &str,
     public_key: Option<&str>,
     secret_key: Option<&str>,
+	initial_data: Option<Value>,
 ) -> Result<(ParamsOfEncodeMessage, String), String> {
     let abi_str = std::fs::read_to_string(abi_path)
         .map_err(|e| format!("failed to read ABI file: {}", e))?;
@@ -214,7 +205,8 @@ async fn prepare_deploy_message(
     let addr = calc_acc_address(
         code_base64.to_string(),
         keypair.as_ref().map(|k| k.public.clone()),
-        abi.clone()
+        abi.clone(),
+		initial_data.clone(),
     ).await?;
     let params = serde_json::from_str(params)
         .map_err(|e| format!("function arguments is not a json: {}", e))?;
@@ -225,6 +217,7 @@ async fn prepare_deploy_message(
         deploy_set: Some(DeploySet {
             tvc: code_base64.to_string(),
             workchain_id: Some(WORKCHAIN),
+			initial_data,
             ..Default::default()
         }),
         call_set: CallSet::some_with_function_and_input("constructor", params),
